@@ -21,9 +21,9 @@ main = do
   let credentials = (BS.pack "neo4j", BS.pack password)
   withAuthConnection (BS.pack "localhost") 7474 credentials $ do
     B.runBatch $ do
-      let spr = addMovieNode "Saving Private Ryan"
+      spr <- addMovieNode "Saving Private Ryan"
       addLabel (T.pack "Movie") spr
-      let actorNodes = map addActorNode actors
+      actorNodes <- mapM addActorNode actors
       mapM_ (addLabel (T.pack "Actor")) actorNodes
       mapM_ (createMovieToActorRelationship spr) actorNodes
   print actors
@@ -34,16 +34,11 @@ addMovieNode title = B.createNode $ M.fromList [ (T.pack "title") |: (T.pack tit
 addActorNode :: String -> B.Batch (B.BatchFuture Node)
 addActorNode name = B.createNode $ M.fromList [ (T.pack "name") |: (T.pack name) ]
 
-createMovieToActorRelationship :: B.Batch (B.BatchFuture Node) -> B.Batch (B.BatchFuture Node) -> B.Batch (B.BatchFuture Relationship)
-createMovieToActorRelationship movieNode actorNode = do
-  movie <- movieNode
-  actor <- actorNode
-  B.createRelationship (T.pack "ACTED_IN") M.empty actor movie
+createMovieToActorRelationship :: B.BatchFuture Node -> B.BatchFuture Node -> B.Batch (B.BatchFuture Relationship)
+createMovieToActorRelationship movieNode actorNode = B.createRelationship (T.pack "ACTED_IN") M.empty actorNode movieNode
 
-addLabel :: Label -> B.Batch (B.BatchFuture Node) -> B.Batch (B.BatchFuture ())
-addLabel label neoNode = do
-  node <- neoNode
-  B.addLabels [label] node
+addLabel :: Label -> B.BatchFuture Node -> B.Batch (B.BatchFuture ())
+addLabel label node = B.addLabels [label] node
 
 getActorNames tree = (getActors tree) //> hasAttrValue "itemprop" (== "name") /> getText
 
