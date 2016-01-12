@@ -1,6 +1,7 @@
 import System.Environment
 import Text.XML.HXT.Core
 import Text.HandsomeSoup
+import Data.Tree.NTree.TypeDefs
 import Network.HTTP
 import Database.Neo4j
 import qualified Data.ByteString.Char8 as BS
@@ -17,36 +18,59 @@ main = do
   html <- getHTML url
   {- find names -}
   let doc = readString [withParseHTML yes, withWarnings no] html
-  actors <- runX $ getActorNames doc
+  titles <- runX $ getMovieTitle doc
+  let movie = Movie { title = (titles !! 0) }
+  actors <- parseActors doc
   let credentials = (BS.pack "neo4j", BS.pack password)
+  {- persist to DB -}
   withAuthConnection (BS.pack "localhost") 7474 credentials $ do
     B.runBatch $ do
-      spr <- addMovieNode "Saving Private Ryan"
+      spr <- addMovieNode movie
       addLabel (T.pack "Movie") spr
       actorNodes <- mapM addActorNode actors
       mapM_ (addLabel (T.pack "Actor")) actorNodes
       mapM_ (createMovieToActorRelationship spr) actorNodes
-  print actors
+  print "Success!"
 
-addMovieNode :: String -> B.Batch (B.BatchFuture Node)
-addMovieNode title = B.createNode $ M.fromList [ (T.pack "title") |: (T.pack title) ]
+{- HTML request -}
 
-addActorNode :: String -> B.Batch (B.BatchFuture Node)
-addActorNode name = B.createNode $ M.fromList [ (T.pack "name") |: (T.pack name) ]
+getHTML :: String -> IO String
+getHTML url = simpleHTTP (getRequest url) >>= getResponseBody
+
+{- HTML parsing -}
+
+data Actor = Actor { name :: String, url :: String }
+data Movie = Movie { title :: String }
+
+getMovieTitle :: IOSArrow XmlTree (NTree XNode) -> IOSLA (XIOState ()) XmlTree String
+getMovieTitle tree = tree //> hasAttrValue "class" (== "header") /> hasAttrValue "itemprop" (== "name") /> getText
+
+parseActors :: IOSArrow XmlTree (NTree XNode) -> IO [Actor]
+parseActors tree = do
+  actorProps <- runX $ tree //> hasAttrValue "itemprop" (== "actor") >>> (parseActorName &&& parseActorUrl)
+  return $ map (\(x,y) -> Actor { name = x, url = y }) actorProps
+
+parseActorName :: IOSLA (XIOState ()) XmlTree String
+parseActorName = deep $ hasAttrValue "itemprop" (== "name") /> getText
+
+parseActorUrl :: IOSLA (XIOState ()) XmlTree String
+parseActorUrl = deep $ hasAttrValue "itemprop" (== "url") >>> getAttrValue "href"
+
+{- DB Interaction -}
+
+addMovieNode :: Movie -> B.Batch (B.BatchFuture Node)
+addMovieNode movie = B.createNode $ M.fromList [ (T.pack "title") |: (T.pack $ title movie)
+                                               ]
+
+addActorNode :: Actor -> B.Batch (B.BatchFuture Node)
+addActorNode actor = B.createNode $ M.fromList [ (T.pack "name") |: (T.pack $ name actor)
+                                               , (T.pack "url")   |: (T.pack $ url actor) 
+                                               ]
 
 createMovieToActorRelationship :: B.BatchFuture Node -> B.BatchFuture Node -> B.Batch (B.BatchFuture Relationship)
 createMovieToActorRelationship movieNode actorNode = B.createRelationship (T.pack "ACTED_IN") M.empty actorNode movieNode
 
 addLabel :: Label -> B.BatchFuture Node -> B.Batch (B.BatchFuture ())
 addLabel label node = B.addLabels [label] node
-
-getActorNames tree = (getActors tree) //> hasAttrValue "itemprop" (== "name") /> getText
-
-getActors tree = tree //> hasAttrValue "itemprop" (== "actor")
-
-{- doc >>> deep (hasAttrValue "class" (== "itemprop")) >>> (getElemName &&& getAttrValue "itemprop") -}
-
-getHTML :: String -> IO String
-getHTML url = simpleHTTP (getRequest url) >>= getResponseBody
 
 
