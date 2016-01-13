@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 import System.Environment
 import Text.XML.HXT.Core
 import Text.HandsomeSoup
@@ -14,14 +16,13 @@ main = do
   {- get HTML -}
   args <- getArgs
   let url = args !! 0
-  let password = args !! 1
+  let password = BS.pack $ args !! 1
   html <- getHTML url
   {- find names -}
   let doc = readString [withParseHTML yes, withWarnings no] html
-  titles <- runX $ getMovieTitle doc
-  let movie = Movie { title = (titles !! 0) }
-  actors <- parseActors doc
-  let credentials = (BS.pack "neo4j", BS.pack password)
+  movie <- parseMovieFromMoviePage url doc
+  actors <- parseActorsFromMoviePage doc
+  let credentials = ("neo4j", password)
   {- persist to DB -}
   withAuthConnection (BS.pack "localhost") 7474 credentials $ do
     B.runBatch $ do
@@ -39,16 +40,21 @@ getHTML url = simpleHTTP (getRequest url) >>= getResponseBody
 
 {- HTML parsing -}
 
-data Actor = Actor { name :: String, url :: String }
-data Movie = Movie { title :: String }
+data Actor = Actor { name :: T.Text, actorUrl :: T.Text }
+data Movie = Movie { title :: T.Text, movieUrl :: T.Text }
+
+parseMovieFromMoviePage :: String -> IOSArrow XmlTree (NTree XNode) -> IO Movie
+parseMovieFromMoviePage url tree = do
+  title <- fmap head $ runX $ getMovieTitle tree
+  return Movie { title = (T.pack title), movieUrl = (T.pack url) }
 
 getMovieTitle :: IOSArrow XmlTree (NTree XNode) -> IOSLA (XIOState ()) XmlTree String
 getMovieTitle tree = tree //> hasAttrValue "class" (== "header") /> hasAttrValue "itemprop" (== "name") /> getText
 
-parseActors :: IOSArrow XmlTree (NTree XNode) -> IO [Actor]
-parseActors tree = do
+parseActorsFromMoviePage :: IOSArrow XmlTree (NTree XNode) -> IO [Actor]
+parseActorsFromMoviePage tree = do
   actorProps <- runX $ tree //> hasAttrValue "itemprop" (== "actor") >>> (parseActorName &&& parseActorUrl)
-  return $ map (\(x,y) -> Actor { name = x, url = y }) actorProps
+  return $ map (\(name,url) -> Actor { name = (T.pack name), actorUrl = (T.pack url) }) actorProps
 
 parseActorName :: IOSLA (XIOState ()) XmlTree String
 parseActorName = deep $ hasAttrValue "itemprop" (== "name") /> getText
@@ -59,12 +65,12 @@ parseActorUrl = deep $ hasAttrValue "itemprop" (== "url") >>> getAttrValue "href
 {- DB Interaction -}
 
 addMovieNode :: Movie -> B.Batch (B.BatchFuture Node)
-addMovieNode movie = B.createNode $ M.fromList [ (T.pack "title") |: (T.pack $ title movie)
+addMovieNode movie = B.createNode $ M.fromList [ "title" |: title movie
+                                               , "url"   |: movieUrl movie
                                                ]
-
 addActorNode :: Actor -> B.Batch (B.BatchFuture Node)
-addActorNode actor = B.createNode $ M.fromList [ (T.pack "name") |: (T.pack $ name actor)
-                                               , (T.pack "url")   |: (T.pack $ url actor) 
+addActorNode actor = B.createNode $ M.fromList [ "name"  |: name actor
+                                               , "url"   |: actorUrl actor
                                                ]
 
 createMovieToActorRelationship :: B.BatchFuture Node -> B.BatchFuture Node -> B.Batch (B.BatchFuture Relationship)
