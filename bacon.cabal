@@ -21,6 +21,8 @@ executable bacon
   -- other-extensions:
   build-depends: base >= 4.7 && < 4.8
                  , hxt <= 9.3.1.15
+                 , hxt-http <= 9.1.5.2
+                 , hxt-tagsoup <= 9.1.3
                  , HandsomeSoup <= 0.4.2
                  , HTTP >= 4000.3.1
                  , haskell-neo4j-client >= 0.1.5.0
