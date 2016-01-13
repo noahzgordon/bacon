@@ -2,36 +2,65 @@
 
 import System.Environment
 import Text.XML.HXT.Core
-import Text.HandsomeSoup
 import Data.Tree.NTree.TypeDefs
 import Network.HTTP
 import Database.Neo4j
+import System.IO (hFlush, stdout, stdin, putChar, hGetEcho, hSetEcho)
+import Control.Exception (bracket_)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.HashMap.Lazy as M
 import qualified Data.Text as T
 import qualified Database.Neo4j.Batch as B
 
+type Url = String
+
+data Actor = Actor { name :: T.Text, actorUrl :: T.Text }
+data Movie = Movie { title :: T.Text, movieUrl :: T.Text }
+
 main :: IO ()
 main = do
   {- get HTML -}
-  args <- getArgs
-  let url = args !! 0
-  let password = BS.pack $ args !! 1
+  putStrLn "In order to use this program, you must run a Neo4j server on localhost:7474."
+  putStrLn "If you are not already doing so, start it up now.\n"
+  putStrLn "What is your Neo4j server username?"
+  username <- getLine
+  putStrLn "What is your Neo4j server password?"
+  password <- getPassword
+  putStrLn "Please provide an IMDB movie url from which to start the Baconator."
+  url <- getLine
+  processMoviePage url (BS.pack username, BS.pack password)
+
+processMoviePage :: Url -> Credentials -> IO ()
+processMoviePage url credentials = do
   html <- getHTML url
-  {- find names -}
+  {- scrape page and build data -}
   let doc = readString [withParseHTML yes, withWarnings no] html
   movie <- parseMovieFromMoviePage url doc
   actors <- parseActorsFromMoviePage doc
-  let credentials = ("neo4j", password)
   {- persist to DB -}
-  withAuthConnection (BS.pack "localhost") 7474 credentials $ do
+  withAuthConnection "localhost" 7474 credentials $ do
     B.runBatch $ do
       spr <- addMovieNode movie
       addLabel (T.pack "Movie") spr
       actorNodes <- mapM addActorNode actors
       mapM_ (addLabel (T.pack "Actor")) actorNodes
       mapM_ (createMovieToActorRelationship spr) actorNodes
-  print "Success!"
+  putStrLn $ (T.unpack $ title movie) ++ " processed!"
+
+{- Console helpers -}
+
+getPassword :: IO String
+getPassword = do
+  putStr "Password: "
+  hFlush stdout
+  pass <- withEcho False getLine
+  putChar '\n'
+  return pass
+
+withEcho :: Bool -> IO a -> IO a
+withEcho echo action = do
+  old <- hGetEcho stdin
+  bracket_ (hSetEcho stdin echo) (hSetEcho stdin old) action
 
 {- HTML request -}
 
@@ -40,10 +69,7 @@ getHTML url = simpleHTTP (getRequest url) >>= getResponseBody
 
 {- HTML parsing -}
 
-data Actor = Actor { name :: T.Text, actorUrl :: T.Text }
-data Movie = Movie { title :: T.Text, movieUrl :: T.Text }
-
-parseMovieFromMoviePage :: String -> IOSArrow XmlTree (NTree XNode) -> IO Movie
+parseMovieFromMoviePage :: Url -> IOSArrow XmlTree (NTree XNode) -> IO Movie
 parseMovieFromMoviePage url tree = do
   title <- fmap head $ runX $ getMovieTitle tree
   return Movie { title = (T.pack title), movieUrl = (T.pack url) }
