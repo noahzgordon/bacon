@@ -1,25 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Safe (headMay)
 import Network.HTTP (simpleHTTP, getRequest, getResponseBody)
 import Text.HandsomeSoup (css)
 import Text.XML.HXT.Core as HXT
 import Text.XML.HXT.HTTP
 import Text.XML.HXT.TagSoup
-import Data.Tree.NTree.TypeDefs (NTree)
 import System.IO (hFlush, stdout, stdin, putChar, hGetEcho, hSetEcho)
 import Control.Exception (bracket_)
-import Database.Neo4j as Neo
+import Data.Tree.NTree.TypeDefs (NTree)
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.HashMap.Lazy as M
 import qualified Data.Text as T
 import qualified Data.List as L
-import qualified Database.Neo4j.Batch as B
+
+import qualified Database as DB
+
+import Actor (Actor(..))
+import Movie (Movie(..))
 
 type Url = String
-
-data Actor = Actor { name :: T.Text, actorUrl :: T.Text }
-data Movie = Movie { title :: T.Text, movieUrl :: T.Text }
 
 main :: IO ()
 main = do
@@ -33,59 +31,39 @@ main = do
   url <- getLine
   processInitialPage (BS.pack username, BS.pack password) url
 
-processInitialPage :: Credentials -> Url -> IO ()
+processInitialPage :: DB.Credentials -> Url -> IO ()
 processInitialPage credentials url = do
   let doc = getHtmlDocument url
   movie <- parseMovieFromMoviePage url doc
-  Neo.withAuthConnection "localhost" 7474 credentials $ do
-    B.runBatch $ do
-      movieNode <- addMovieNode movie
-      addLabel (T.pack "Movie") movieNode
+  DB.createMovie credentials movie
   processMoviePage credentials movie
 
-processMoviePage :: Credentials -> Movie -> IO ()
+processMoviePage :: DB.Credentials -> Movie -> IO ()
 processMoviePage credentials movie = do
   let doc = getHtmlDocument $ T.unpack $ movieUrl movie
   actors <- parseActorsFromMoviePage doc
-  fetchedMovieNode <- Neo.withAuthConnection "localhost" 7474 credentials $ do
-    movieNodes <- getMovieNodes movie
-    return $ headMay movieNodes
+  fetchedMovieNode <- DB.fetchMovieNode credentials movie
   case fetchedMovieNode of
     Just movieNode -> do
-      Neo.withAuthConnection "localhost" 7474 credentials $ do
-        B.runBatch $ do
-          newMovieNode <- addMovieNode movie
-          addLabel (T.pack "Movie") newMovieNode
-          actorNodes <- mapM addActorNode actors
-          mapM_ (addLabel "Actor") actorNodes
-          mapM_ (createMovieToActorRelationship newMovieNode) actorNodes
-          return newMovieNode
+      putStrLn $ "Movie '" ++ (T.unpack $ title movie) ++ "' already in graph."
+    Nothing -> do
+      DB.createMovieWithActors credentials movie actors
       putStrLn $ (T.unpack $ title movie) ++ " processed!"
       mapM_ (processActorPage credentials) actors
-    Nothing -> do
-      putStrLn $ "Movie '" ++ (T.unpack $ title movie) ++ "' already in graph."
 
 
-processActorPage :: Credentials -> Actor -> IO ()
+processActorPage :: DB.Credentials -> Actor -> IO ()
 processActorPage credentials actor = do
   let doc = getHtmlDocument $ T.unpack $ actorUrl actor
   movies <- parseMoviesFromActorPage doc
-  fetchedActorNode <- Neo.withAuthConnection "localhost" 7474 credentials $ do
-    actorNodes <- getActorNodes actor
-    return $ headMay actorNodes
+  fetchedActorNode <- DB.fetchActorNode credentials actor
   case fetchedActorNode of
     Just movieNodes -> do
-      Neo.withAuthConnection "localhost" 7474 credentials $ do
-        B.runBatch $ do
-          actorNode <- addActorNode actor
-          addLabel "Actor" actorNode
-          movieNodes <- mapM addMovieNode movies
-          mapM_ (addLabel "Movie") movieNodes
-          mapM_ (createActorToMovieRelationship actorNode) movieNodes
+      putStrLn $ "Actor '" ++ (T.unpack $ name actor) ++ "' already in graph."
+    Nothing -> do
+      DB.createActorWithMovies credentials actor movies
       putStrLn $ (T.unpack $ name actor) ++ " processed!"
       mapM_ (processMoviePage credentials) movies
-    Nothing -> do
-      putStrLn $ "Actor '" ++ (T.unpack $ name actor) ++ "' already in graph."
 
 {- Console helpers -}
 
@@ -145,32 +123,3 @@ parseMovieTitle = deep $ hasName "a" /> getText
 
 parseMovieUrl :: HXT.IOSLA (HXT.XIOState ()) HXT.XmlTree String
 parseMovieUrl = deep $ hasName "a" >>> getAttrValue "href"
-
-{- DB Interaction -}
-
-getMovieNodes :: Movie -> Neo4j [Node]
-getMovieNodes movie = do
-  getNodesByLabelAndProperty "Movie" (Just ("title" |: title movie))
-
-getActorNodes :: Actor -> Neo4j [Node]
-getActorNodes movie = do
-  getNodesByLabelAndProperty "Actor" (Just ("name" |: name movie))
-
-addMovieNode :: Movie -> B.Batch (B.BatchFuture Node)
-addMovieNode movie = B.createNode $ M.fromList [ "title" |: title movie
-                                               , "url"   |: movieUrl movie
-                                               ]
-addActorNode :: Actor -> B.Batch (B.BatchFuture Node)
-addActorNode actor = B.createNode $ M.fromList [ "name"  |: name actor
-                                               , "url"   |: actorUrl actor
-                                               ]
-
-createMovieToActorRelationship :: B.BatchFuture Node -> B.BatchFuture Node -> B.Batch (B.BatchFuture Relationship)
-createMovieToActorRelationship movieNode actorNode = B.createRelationship (T.pack "ACTED_IN") M.empty actorNode movieNode
-
-createActorToMovieRelationship :: B.BatchFuture Node -> B.BatchFuture Node -> B.Batch (B.BatchFuture Relationship)
-createActorToMovieRelationship = flip createMovieToActorRelationship
-
-addLabel :: Label -> B.BatchFuture Node -> B.Batch (B.BatchFuture ())
-addLabel label node = B.addLabels [label] node
-
