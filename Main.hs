@@ -7,6 +7,7 @@ import Text.XML.HXT.HTTP
 import Text.XML.HXT.TagSoup
 import System.IO (hFlush, stdout, stdin, putChar, hGetEcho, hSetEcho)
 import Control.Exception (bracket_)
+import Control.Monad (filterM)
 import Data.Tree.NTree.TypeDefs (NTree)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
@@ -35,35 +36,31 @@ processInitialPage :: DB.Credentials -> Url -> IO ()
 processInitialPage credentials url = do
   let doc = getHtmlDocument url
   movie <- parseMovieFromMoviePage url doc
-  DB.createMovie credentials movie
   processMoviePage credentials movie
 
 processMoviePage :: DB.Credentials -> Movie -> IO ()
 processMoviePage credentials movie = do
   let doc = getHtmlDocument $ T.unpack $ movieUrl movie
   actors <- parseActorsFromMoviePage doc
-  fetchedMovieNode <- DB.fetchMovieNode credentials movie
-  case fetchedMovieNode of
-    Just movieNode -> do
-      putStrLn $ "Movie '" ++ (T.unpack $ title movie) ++ "' already in graph."
-    Nothing -> do
-      DB.createMovieWithActors credentials movie actors
-      putStrLn $ (T.unpack $ title movie) ++ " processed!"
-      mapM_ (processActorPage credentials) actors
+  newActors <- filterActors credentials actors
+  DB.createMovieWithActors credentials movie newActors
+  putStrLn $ (T.unpack $ title movie) ++ " processed!"
+  mapM_ (processActorPage credentials) newActors
 
+filterActors :: DB.Credentials -> [Actor] -> IO [Actor]
+filterActors creds actors = filterM (DB.hasNoActorNode creds) actors
 
 processActorPage :: DB.Credentials -> Actor -> IO ()
 processActorPage credentials actor = do
   let doc = getHtmlDocument $ T.unpack $ actorUrl actor
   movies <- parseMoviesFromActorPage doc
-  fetchedActorNode <- DB.fetchActorNode credentials actor
-  case fetchedActorNode of
-    Just movieNodes -> do
-      putStrLn $ "Actor '" ++ (T.unpack $ name actor) ++ "' already in graph."
-    Nothing -> do
-      DB.createActorWithMovies credentials actor movies
-      putStrLn $ (T.unpack $ name actor) ++ " processed!"
-      mapM_ (processMoviePage credentials) movies
+  newMovies <- filterMovies credentials movies
+  DB.createActorWithMovies credentials actor newMovies
+  putStrLn $ (T.unpack $ name actor) ++ " processed!"
+  mapM_ (processMoviePage credentials) newMovies
+
+filterMovies :: DB.Credentials -> [Movie] -> IO [Movie]
+filterMovies creds movies = filterM (DB.hasNoMovieNode creds) movies
 
 {- Console helpers -}
 

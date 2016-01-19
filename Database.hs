@@ -4,6 +4,7 @@ module Database where
 import Safe (headMay)
 import qualified Data.Text as T
 
+import Data.Tree.NTree.TypeDefs (NTree)
 import Database.Neo4j.Graph     (Graph)
 import qualified Database.Neo4j        as N
 import qualified Database.Neo4j.Batch  as B
@@ -14,6 +15,26 @@ import Movie (Movie, title, movieUrl)
 
 type Credentials = N.Credentials
 
+
+hasActorNode :: N.Credentials -> Actor -> IO Bool
+hasActorNode creds actor = do
+  actorNode <- fetchActorNode creds actor
+  return $ case actorNode of
+    Just _  -> True
+    Nothing -> False
+
+hasNoActorNode :: N.Credentials -> Actor -> IO Bool
+hasNoActorNode creds actor = not `fmap` (hasActorNode creds actor)
+
+hasMovieNode :: N.Credentials -> Movie -> IO Bool
+hasMovieNode creds movie = do
+  movieNode <- fetchMovieNode creds movie
+  return $ case movieNode of
+    Just _  -> True
+    Nothing -> False
+
+hasNoMovieNode :: N.Credentials -> Movie -> IO Bool
+hasNoMovieNode creds actor = not `fmap` (hasMovieNode creds actor)
 
 createMovie :: N.Credentials -> Movie -> IO N.Node
 createMovie creds movie =
