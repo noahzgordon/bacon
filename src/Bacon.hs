@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+module Bacon where
 
 import Network.HTTP (simpleHTTP, getRequest, getResponseBody)
 import Text.HandsomeSoup (css)
