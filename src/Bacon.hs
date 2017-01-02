@@ -97,7 +97,7 @@ parseMovieFromMoviePage url tree = do
   return Movie { title = (T.pack title), movieUrl = (T.pack url) }
 
 getMovieTitle :: HXT.IOSArrow HXT.XmlTree (NTree HXT.XNode) -> HXT.IOSLA (HXT.XIOState ()) HXT.XmlTree String
-getMovieTitle tree = tree //> hasAttrValue "class" (== "header") /> hasAttrValue "itemprop" (== "name") /> getText
+getMovieTitle tree = tree //> hasAttrValue "itemprop" (== "name") /> getText
 
 parseActorsFromMoviePage :: HXT.IOSArrow HXT.XmlTree (NTree HXT.XNode) -> IO [Actor]
 parseActorsFromMoviePage tree = do
